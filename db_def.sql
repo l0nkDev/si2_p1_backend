@@ -14,7 +14,7 @@ drop table users cascade;
 select * from users;
 
 CREATE TABLE products (id serial PRIMARY KEY,
-                       name varchar(50) NOT NULL,
+                       name varchar(100) NOT NULL,
 					   description text DEFAULT '',
 					   price decimal(12,2) NOT NULL,
 					   discount decimal(12,2) NOT NULL DEFAULT 0,
@@ -39,5 +39,14 @@ CREATE TABLE cart_entry (id serial PRIMARY KEY,
 						 productid serial REFERENCES products(id) NOT NULL,
 						 quantity integer DEFAULT 0
 						 );
-select * from products;
-insert into products ()
+SELECT id, name, description, price, discount, discount_type, stock, date_added FROM products limit 5 offset 5*0;
+insert into products (name, price) VALUES ('Nintendo Switch', 300);
+insert into products (name, price) VALUES ('Nintendo Switch Lite', 250);
+insert into products (name, price) VALUES ('Nintendo Switch OLED', 350);
+insert into products (name, price) VALUES ('Nintendo Switch 2', 450);
+insert into products (name, price) VALUES ('Nintendo Switch 2 + Mario Kart World', 500);
+insert into products (name, price) VALUES ('Mario Kart World (S2)', 80);
+insert into products (name, price) VALUES ('Donkey Kong Bananza (S2)', 70);
+insert into products (name, price) VALUES ('The Legend of Zelda: Tears of the Kingdom (Switch)', 70);
+insert into products (name, price) VALUES ('The Legend of Zelda: Breath of the Wild (Switch)', 60);
+insert into products (name, price) VALUES ('Super Smash Bros. Ultimate (Switch)', 300);
