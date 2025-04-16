@@ -213,6 +213,7 @@ def cart():
         })
     return jsonify(items), 200
 
+
 @app.route('/users/cart', methods=['DELETE'])
 @cross_origin(origin="*")
 def cart_delete():
@@ -227,6 +228,8 @@ def cart_delete():
     cur.execute('DELETE FROM cart_entries WHERE cartid = {0}'.format(currentCart))
     conn.commit()
     return jsonify({"id": currentCart}), 200
+
+  
 
 @app.route('/users/cart/remove', methods=['DELETE'])
 @cross_origin(origin="*")
