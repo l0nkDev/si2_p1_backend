@@ -191,11 +191,23 @@ def cart():
         })
     return jsonify(items), 200
 
-'''
+
 @app.route('/users/cart', methods=['DELETE'])
 @cross_origin(origin="*")
-def cart_delete()
-'''  
+def cart_delete():
+    cur = conn.cursor()
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token):
+        return jsonify({"detail": "Invalid token"}), 400
+    cur.execute('SELECT id FROM carts WHERE userid = {0}'.format(getUserId(token)))
+    res = cur.fetchall()
+    currentCart = res[0][0]
+    cur.execute('DELETE FROM cart_entries WHERE cartid = {0}'.format(currentCart))
+    conn.commit()
+    return jsonify({"id": currentCart}), 200
+
+    
     
 
 if __name__ == '__main__':
