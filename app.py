@@ -10,7 +10,6 @@ conn = psycopg2.connect(
         password="password"
         )
 
-cur = conn.cursor()
 
 app = Flask(__name__)
 cors = CORS(app)
@@ -24,6 +23,7 @@ def requestVerify(contents: list, request):
     return True
         
 def authVerify(token):
+    cur = conn.cursor() 
     if (token == None): return False
     cur.execute('SELECT id, email, name, lname FROM users WHERE token = \'{0}\''.format(token))
     res = cur.fetchall()
@@ -31,6 +31,7 @@ def authVerify(token):
     return True
 
 def getUserId(token):
+    cur = conn.cursor() 
     cur.execute('SELECT id, email, name, lname FROM users WHERE token = \'{0}\''.format(token))
     res = cur.fetchall()
     return res[0][0]
@@ -38,6 +39,7 @@ def getUserId(token):
 @app.route('/auth/login/email', methods=['POST', 'OPTIONS'])
 @cross_origin(origin="*")
 def email_login():
+    cur = conn.cursor() 
     if not requestVerify(['email', 'password'], request):
         return jsonify({"detail": "Insufficient arguments"}), 400
     json = request.json
@@ -56,6 +58,7 @@ def email_login():
 @app.route('/auth/register', methods=['POST', 'OPTIONS'])
 @cross_origin(origin="*")
 def register():
+    cur = conn.cursor() 
     token = token_urlsafe()
     json = request.json
     print(request.json)
@@ -85,6 +88,7 @@ def register():
 @app.route('/users/self', methods=['GET', 'OPTIONS'])
 @cross_origin(origin="*")
 def self():
+    cur = conn.cursor() 
     try: token: str = request.headers.get('Authorization').split()[1]
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token):
@@ -101,49 +105,52 @@ def self():
 @app.route('/products', methods=['GET'])
 @cross_origin(origin="*")
 def prod():
-     prods = []
-     page = 0
-     if ("page" in request.args): page = request.args["page"]
-     cur.execute('SELECT id, name, description, price, discount, discount_type, stock, date_added, brand FROM products limit 5 offset 5*{0}'.format(page))
-     res = cur.fetchall()
-     for prod in res:
-         prods.append({
-             "id": prod[0],
-             "name": prod[1],
-             "description": prod[2],
-             "price": prod[3],
-             "discount": prod[4],
-             "discount_type": prod[5],
-             "stock": prod[6],
-             "date_added": prod[7],
-             "brand": prod[8]
-             })
-     print(prods)    
-     return jsonify(prods), 200
+    cur = conn.cursor() 
+    prods = []
+    page = 0
+    if ("page" in request.args): page = request.args["page"]
+    cur.execute('SELECT id, name, description, price, discount, discount_type, stock, date_added, brand FROM products limit 5 offset 5*{0}'.format(page))
+    res = cur.fetchall()
+    for prod in res:
+        prods.append({
+            "id": prod[0],
+            "name": prod[1],
+            "description": prod[2],
+            "price": prod[3],
+            "discount": prod[4],
+            "discount_type": prod[5],
+            "stock": prod[6],
+            "date_added": prod[7],
+            "brand": prod[8]
+            })
+    print(prods)    
+    return jsonify(prods), 200
  
 @app.route('/products/get', methods=['GET'])
 @cross_origin(origin="*")
 def prod_get():
-     id = 0
-     if ("id" in request.args): id = request.args["id"]
-     else: return jsonify({"detail": "No id"}), 400
-     cur.execute('SELECT id, name, description, price, discount, discount_type, stock, date_added, brand FROM products WHERE id = {0}'.format(id))
-     res = cur.fetchall()
-     return jsonify({
-             "id": res[0][0],
-             "name": res[0][1],
-             "description": res[0][2],
-             "price": res[0][3],
-             "discount": res[0][4],
-             "discount_type": res[0][5],
-             "stock": res[0][6],
-             "date_added": res[0][7],
-             "brand": res[0][8]
-             }), 200
+    cur = conn.cursor() 
+    id = 0
+    if ("id" in request.args): id = request.args["id"]
+    else: return jsonify({"detail": "No id"}), 400
+    cur.execute('SELECT id, name, description, price, discount, discount_type, stock, date_added, brand FROM products WHERE id = {0}'.format(id))
+    res = cur.fetchall()
+    return jsonify({
+            "id": res[0][0],
+            "name": res[0][1],
+            "description": res[0][2],
+            "price": res[0][3],
+            "discount": res[0][4],
+            "discount_type": res[0][5],
+            "stock": res[0][6],
+            "date_added": res[0][7],
+            "brand": res[0][8]
+            }), 200
      
 @app.route('/users/cart/add', methods=['POST'])
 @cross_origin(origin="*")
 def cart_add():
+    cur = conn.cursor() 
     try: token: str = request.headers.get('Authorization').split()[1]
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token):
@@ -172,6 +179,8 @@ def cart_add():
 @app.route('/users/cart', methods=['GET'])
 @cross_origin(origin="*")
 def cart():
+    cur = conn.cursor() 
+    cur2 = conn.cursor() 
     try: token: str = request.headers.get('Authorization').split()[1]
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token):
@@ -183,20 +192,73 @@ def cart():
     res = cur.fetchall()
     items = []
     for item in res:
+        cur2.execute('SELECT id, name, description, price, discount, discount_type, stock, date_added, brand FROM products WHERE id = {0}'.format(item[2]))
+        res2 = cur2.fetchall()
         items.append({
         "id": item[0],
         "cartid": item[1],
         "productid": item[2],
-        "quantity": item[3]
+        "quantity": item[3],
+        "product": {
+            "id": res2[0][0],
+            "name": res2[0][1],
+            "description": res2[0][2],
+            "price": res2[0][3],
+            "discount": res2[0][4],
+            "discount_type": res2[0][5],
+            "stock": res2[0][6],
+            "date_added": res2[0][7],
+            "brand": res2[0][8]
+            }
         })
     return jsonify(items), 200
 
-'''
 @app.route('/users/cart', methods=['DELETE'])
 @cross_origin(origin="*")
-def cart_delete()
-'''  
-    
+def cart_delete():
+    cur = conn.cursor()
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token):
+        return jsonify({"detail": "Invalid token"}), 400
+    cur.execute('SELECT id FROM carts WHERE userid = {0}'.format(getUserId(token)))
+    res = cur.fetchall()
+    currentCart = res[0][0]
+    cur.execute('DELETE FROM cart_entries WHERE cartid = {0}'.format(currentCart))
+    conn.commit()
+    return jsonify({"id": currentCart}), 200
 
+@app.route('/users/cart/remove', methods=['DELETE'])
+@cross_origin(origin="*")
+def cart_entry_delete():
+    cur = conn.cursor()
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token):
+        return jsonify({"detail": "Invalid token"}), 400
+    cur.execute('DELETE FROM cart_entries WHERE id = {0}'.format(request.args["id"]))
+    conn.commit()
+    return jsonify({"detail": "Entry removed"}), 200
+    
+@app.route('/users/cart/add', methods=['PATCH'])
+@cross_origin(origin="*")
+def cart_update():
+    cur = conn.cursor() 
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token):
+        return jsonify({"detail": "Invalid token"}), 400
+    if not requestVerify(['id', 'quantity'], request):
+        return jsonify({"detail": "Insufficient arguments"}), 400
+    cur.execute('UPDATE cart_entries SET quantity = {0} WHERE id = {1}'.format(request.json["quantity"], request.json["id"]))
+    cur.execute('SELECT * FROM cart_entries WHERE id = {0}'.format(request.json["id"]))
+    res = cur.fetchall()
+    return jsonify({
+        "id": res[0][0],
+        "cartid": res[0][1],
+        "productid": res[0][2],
+        "quantity": res[0][3]
+        }), 200
+    
 if __name__ == '__main__':
     app.run(host='192.168.0.18', debug=True)
