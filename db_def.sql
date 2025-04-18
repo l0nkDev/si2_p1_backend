@@ -56,7 +56,8 @@ CREATE TABLE purchases (id serial PRIMARY KEY,
 				        paid_on timestamp DEFAULT CURRENT_TIMESTAMP,
 				        total_paid decimal(12,2),
 				        payment_method varchar(30) DEFAULT 'Stripe',
-				    	delivery_status varchar(30) DEFAULT 'Procesando...'
+				    	delivery_status varchar(30) DEFAULT 'Procesando...',
+						vip varchar(1) default 'N'
 				        );
 drop table purchases cascade;
 select * from purchases;
@@ -73,11 +74,46 @@ CREATE TABLE purchased (id serial PRIMARY KEY,
 drop table purchased cascade;
 select * from purchased;
 
-SELECT *, ts_rank(to_tsvector('spanish', name || ' ' || coalesce(description, '')), websearch_to_tsquery('spanish', 'Consola')) as rank
-FROM products WHERE deleted = 'N' AND to_tsvector('spanish', name || ' ' || coalesce(description, '')) @@ websearch_to_tsquery('spanish', 'Consola') ORDER BY rank DESC limit 20 offset 0;
+CREATE TABLE productrating (id serial PRIMARY KEY,
+							 userid serial REFERENCES users(id) NOT NULL,
+							 productid serial REFERENCES products(id) NOT NULL,
+							 rating decimal(2,1) NOT NULL
+                            );
 
-SELECT purchases.*, purchased.* from purchased, purchases, carts where purchaseid = purchases.id and cartid = carts.id and userid = 1 order by purchases.id desc;
+CREATE TABLE deliveryrating (id serial PRIMARY KEY,
+							 userid serial REFERENCES users(id) NOT NULL,
+							 purchaseid serial REFERENCES purchases(id) NOT NULL,
+							 rating decimal(2,1) NOT NULL
+                            );
 
+CREATE TABLE deliveryassignment (id serial PRIMARY KEY,
+							      userid serial REFERENCES users(id) NOT NULL,
+							      purchaseid serial REFERENCES purchases(id) NOT NULL
+                                 );
+
+CREATE TABLE bitacora (id serial PRIMARY KEY,
+						userid serial REFERENCES users(id) NOT NULL,
+						action text NOT NULL,
+						ip text NOT NULL,
+						datetime timestamp DEFAULT CURRENT_TIMESTAMP);
+
+SELECT purchases.id, users.name, users.lname, users.country, users.state, users.address, purchases.paid_on, purchases.delivery_status, purchased.name, purchased.brand, purchased.quantity from purchased, purchases, carts, users where purchaseid = purchases.id and cartid = carts.id and carts.userid = users.id and purchases.id in (select purchaseid from deliveryassignment where userid = 1) order by purchases.id desc;
+insert into deliveryassignment (userid, purchaseid) values (1, 2);
+SELECT products.*, cast(coalesce(avg(rating) filter (where productid = products.id), 0) AS DECIMAL(2,1)) FROM products, productrating WHERE deleted = 'N' group by products.id ORDER BY products.id DESC;
+
+SELECT products.id, name, description, price, discount, discount_type, stock, date_added, brand, cast(coalesce(avg(rating) filter (where productid = products.id), 0) as decimal(2,1)) FROM products, productrating WHERE products.id = 1 group by products.id;
+
+SELECT purchases.*, purchased.*, cast(coalesce(avg(rating) filter (where productrating.productid = purchased.productid), 0) as decimal(2,1)) from purchased, purchases, carts, productrating where purchaseid = purchases.id and cartid = carts.id and carts.userid = 1 order by purchases.id desc;
+
+select products.*, count(purchased.productid), cast(coalesce(avg(rating) filter (where productrating.productid = products.id), 0) AS DECIMAL(2,1)) from purchased, products, productrating 
+        where products.id = purchased.productid and purchased.productid != 5 and products.deleted = 'N'
+        and purchaseid in (select purchaseid from purchased, purchases 
+                        where purchaseid = purchases.id and productid = 5 
+                        and purchases.paid_on > (NOW() - interval ' 6 months')) 
+        group by products.id order by count desc limit 5;
+
+		
+insert into productrating (userid, productid, rating) values (3, 1, 3.5);
 insert into products (name, brand, description, price) VALUES ('Nintendo Switch', 'Nintendo', 'Consola de videojuegos', 300);
 insert into products (name, brand, description, price) VALUES ('Nintendo Switch Lite', 'Nintendo', 'Consola de videojuegos', 250);
 insert into products (name, brand, description, price) VALUES ('Nintendo Switch OLED', 'Nintendo', 'Consola de videojuegos', 350);

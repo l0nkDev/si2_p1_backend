@@ -1,7 +1,12 @@
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify, abort, send_from_directory
 from flask_cors import CORS, cross_origin # type: ignore
 from secrets import token_urlsafe
 import psycopg2 # type: ignore
+from pathlib import Path
+
+
+UPLOAD_FOLDER = str(Path(__file__).parent / 'assets')
+ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg'}
 
 conn = psycopg2.connect(
         host="localhost",
@@ -15,6 +20,7 @@ app = Flask(__name__)
 cors = CORS(app)
 app.config['DEBUG'] = True
 app.config['CORS_HEADERS'] = 'application/json'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 def requestVerify(contents: list, request):
     if not request: return False
@@ -42,6 +48,18 @@ def adminVerify(token):
     res = cur.fetchall()
     return res[0][0] in ['admin', 'owner']
 
+def delivVerify(token):
+    cur = conn.cursor()
+    cur.execute('SELECT role FROM users WHERE token = \'{0}\' AND deleted = \'N\''.format(token))
+    res = cur.fetchall()
+    return res[0][0] in ['delivery', 'owner']
+
+def isVip(token):
+    cur = conn.cursor()
+    cur.execute('select coalesce(sum(total_paid), 0) from purchases, carts where cartid = carts.id and purchases.paid_on > (NOW() - interval \' 1 week\') and carts.userid = {0}'.format(getUserId(token)))
+    res = cur.fetchall()
+    return res[0][0] >= 1000
+
 @app.route('/auth/login/email', methods=['POST', 'OPTIONS'])
 @cross_origin(origin="*")
 def email_login():
@@ -58,8 +76,6 @@ def email_login():
         "access_token": res[0][1],
         "id": res[0][0]
         }), 200
-
-
 
 @app.route('/auth/register', methods=['POST', 'OPTIONS'])
 @cross_origin(origin="*")
@@ -99,7 +115,7 @@ def self():
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token):
         return jsonify({"detail": "Invalid token"}), 400
-    cur.execute('SELECT id, email, name, lname, role FROM users WHERE token = \'{0}\' AND deleted = \'N\''.format(token))
+    cur.execute('SELECT id, email, name, lname, role, country, state, address, password FROM users WHERE token = \'{0}\' AND deleted = \'N\''.format(token))
     res = cur.fetchall()
     return jsonify({
         "email": res[0][1],
@@ -107,6 +123,12 @@ def self():
         "name": res[0][2],
         "lname": res[0][3],
         "role": res[0][4],
+        "country": res[0][5],
+        "state": res[0][6],
+        "address": res[0][7],
+        "password": res[0][8],
+        "token": token,
+        'vip': 'Y' if isVip(token) else 'N'
         }), 200 
 
 @app.route('/products', methods=['GET'])
@@ -116,7 +138,7 @@ def prod():
     prods = []
     page = 0
     if ("page" in request.args): page = request.args["page"]
-    cur.execute('SELECT * FROM products WHERE deleted = \'N\' ORDER BY id DESC limit 20 offset 20*{0}'.format(page))
+    cur.execute('SELECT products.*, cast(coalesce(avg(rating) filter (where productid = products.id), 0) AS DECIMAL(2,1)) FROM products, productrating WHERE deleted = \'N\' group by products.id ORDER BY products.id DESC limit 20 offset 20*{0}'.format(page))
     res = cur.fetchall()
     for prod in res:
         prods.append({
@@ -127,7 +149,8 @@ def prod():
             "discount": prod[5],
             "discount_type": prod[6],
             "stock": prod[7],
-            "brand": prod[2]
+            "brand": prod[2],
+            "rating": prod[10]
             })
     print(prods)    
     return jsonify(prods), 200
@@ -139,8 +162,8 @@ def prod_search():
     prods = []
     page = 0
     if ("page" in request.args): page = request.args["page"]
-    cur.execute('''SELECT *, ts_rank(to_tsvector('spanish', name || ' ' || coalesce(description, '')), websearch_to_tsquery('spanish', '{1}')) as rank
-                   FROM products WHERE deleted = 'N' AND to_tsvector('spanish', name || ' ' || coalesce(description, '')) @@ websearch_to_tsquery('spanish', '{1}') ORDER BY rank DESC limit 20 offset 20*{0}'''.format(page, request.args["q"]))
+    cur.execute('''SELECT products.*, cast(coalesce(avg(rating) filter (where productid = products.id), 0) AS DECIMAL(2,1)), ts_rank(to_tsvector('spanish', name || ' ' || coalesce(description, '')), websearch_to_tsquery('spanish', '{1}')) as rank
+                   FROM products, productrating WHERE deleted = 'N' AND to_tsvector('spanish', name || ' ' || coalesce(description, '')) @@ websearch_to_tsquery('spanish', '{1}') group by products.id ORDER BY rank DESC limit 20 offset 20*{0}'''.format(page, request.args["q"]))
     res = cur.fetchall()
     for prod in res:
         prods.append({
@@ -151,7 +174,8 @@ def prod_search():
             "discount": prod[5],
             "discount_type": prod[6],
             "stock": prod[7],
-            "brand": prod[2]
+            "brand": prod[2],
+            "rating": prod[10]
             })
     print(prods)    
     return jsonify(prods), 200
@@ -163,7 +187,34 @@ def prod_get():
     id = 0
     if ("id" in request.args): id = request.args["id"]
     else: return jsonify({"detail": "No id"}), 400
-    cur.execute('SELECT id, name, description, price, discount, discount_type, stock, date_added, brand FROM products WHERE id = {0}'.format(id))
+    cur.execute(
+        '''
+        select products.*, count(purchased.productid), cast(coalesce(avg(rating) filter (where productrating.productid = products.id), 0) AS DECIMAL(2,1)) from purchased, products, productrating 
+        where products.id = purchased.productid and purchased.productid != {0} and products.deleted = 'N'
+        and purchaseid in (select purchaseid from purchased, purchases 
+                        where purchaseid = purchases.id and productid = {0} 
+                        and purchases.paid_on > (NOW() - interval ' 6 months')) 
+        group by products.id order by count desc limit 5;
+        '''.format(id)
+        )
+    res = cur.fetchall()
+    recs = []
+    for item in res:
+        recs.append(
+            {
+            "id": item[0],
+            "name": item[1],
+            "brand": item[2],
+            "description": item[3],
+            "price": item[4],
+            "discount": item[5],
+            "discount_type": item[6],
+            "stock": item[7],
+            "date_added": item[9],
+            "rating": item[11],
+            }
+        )
+    cur.execute('SELECT products.id, name, description, price, discount, discount_type, stock, date_added, brand, cast(coalesce(avg(rating) filter (where productid = products.id), 0) as decimal(2,1)) FROM products, productrating WHERE products.id = {0} group by products.id'.format(id))
     res = cur.fetchall()
     return jsonify({
             "id": res[0][0],
@@ -174,7 +225,9 @@ def prod_get():
             "discount_type": res[0][5],
             "stock": res[0][6],
             "date_added": res[0][7],
-            "brand": res[0][8]
+            "brand": res[0][8],
+            "rating": res[0][9],
+            "recommendations": recs
             }), 200
      
 @app.route('/users/cart/add', methods=['POST'])
@@ -222,7 +275,7 @@ def cart():
     res = cur.fetchall()
     items = []
     for item in res:
-        cur2.execute('SELECT id, name, description, price, discount, discount_type, stock, date_added, brand FROM products WHERE id = {0} AND deleted = \'N\''.format(item[2]))
+        cur2.execute('SELECT products.id, name, description, price, discount, discount_type, stock, date_added, brand, cast(coalesce(avg(rating) filter (where productid = products.id), 0) as decimal(2,1)) FROM products, productrating WHERE products.id = {0} AND deleted = \'N\' group by products.id'.format(item[2]))
         res2 = cur2.fetchall()
         items.append({
         "id": item[0],
@@ -238,7 +291,8 @@ def cart():
             "discount_type": res2[0][5],
             "stock": res2[0][6],
             "date_added": res2[0][7],
-            "brand": res2[0][8]
+            "brand": res2[0][8],
+            "rating": res2[0][9]
             }
         })
     return jsonify(items), 200
@@ -441,20 +495,20 @@ def cart_checkout():
     res = cur.fetchall()
     currentCart = res[0][0]
     cur.execute('''
-                insert into purchases (cartid, total_paid) 
+                insert into purchases (cartid, total_paid, vip) 
                 SELECT carts.id, 
                 sum(
                     case 
                         when discount = 0 then CAST(price*quantity AS decimal(12,2)) 
                         when discount_type = 'P' then CAST((price*(1-(discount*0.01)))*quantity AS decimal(12,2)) 
                         else CAST((price-discount)*quantity AS decimal(12,2)) 
-                    end) as tprice 
+                    end) as tprice, '{1}' 
                 from products, cart_entries, carts where 
                     products.id = productid and 
                     deleted = 'N' and 
                     cartid = carts.id and 
                     carts.id = {0} group by carts.id;
-        '''.format(currentCart))
+        '''.format(currentCart, "Y" if isVip(token) else "N"))
     cur.execute('''
                 insert into purchased (purchaseid, productid, name, brand, price, dprice, quantity, fprice) 
                     select 
@@ -486,7 +540,7 @@ def purchases():
     try: token: str = request.headers.get('Authorization').split()[1]
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
-    cur.execute('SELECT purchases.*, purchased.* from purchased, purchases, carts where purchaseid = purchases.id and cartid = carts.id and userid = {0} order by purchases.id desc'.format(getUserId(token)))
+    cur.execute('SELECT purchases.*, purchased.*, cast(coalesce(avg(productrating.rating) filter (where productrating.productid = purchased.productid), 0) as decimal(2,1)), cast(coalesce((select rating from deliveryrating where purchaseid = purchases.id), 0) as decimal(2,1)) from purchased, purchases, carts, productrating where purchased.purchaseid = purchases.id and cartid = carts.id and carts.userid = {0} group by (purchases.id, purchased.id) order by purchases.id desc'.format(getUserId(token)))
     res = cur.fetchall()
     if len(res) == 0: return jsonify({"detail": "No purchases"}), 400
     purchases = []
@@ -495,6 +549,8 @@ def purchases():
     total_paid = res[0][3]
     payment_method = res[0][4]
     delivery_status = res[0][5]
+    vip = res[0][6]
+    rating = res[0][17]
     purchase = []
     for entry in res:
         if entry[0] != id:
@@ -505,6 +561,8 @@ def purchases():
                     "total_paid": total_paid,
                     "payment_method": payment_method,
                     "delivery_status": delivery_status,
+                    "vip": vip,
+                    "rating": rating,
                     "items": purchase
                 }
             )
@@ -513,17 +571,20 @@ def purchases():
             total_paid = entry[3]
             payment_method = entry[4]
             delivery_status = entry[5] 
+            vip = entry[6] 
+            rating = entry[17] 
             purchase = []
         purchase.append(
             {
-                "id": entry[6],
-                "productid": entry[8],
-                "name": entry[9],
-                "brand": entry[10],
-                "price": entry[11],
-                "dprice": entry[12],
-                "quantity": entry[13],
-                "fprice": entry[14]
+                "id": entry[7],
+                "productid": entry[9],
+                "name": entry[10],
+                "brand": entry[11],
+                "price": entry[12],
+                "dprice": entry[13],
+                "quantity": entry[14],
+                "fprice": entry[15],
+                "rating": entry[16]
             }
         )
     purchases.append(
@@ -533,11 +594,209 @@ def purchases():
             "total_paid": total_paid,
             "payment_method": payment_method,
             "delivery_status": delivery_status,
+            "rating": rating,
             "items": purchase
         }
     )
     return jsonify(purchases), 200
 
+@app.route('/admin/delivery', methods=['GET'])
+@cross_origin(origin="*")
+def delivery():
+    cur = conn.cursor()
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    if not delivVerify(token): return jsonify({"detail": "Unauthorized"}), 400
+    cur.execute('SELECT purchases.id, users.name, users.lname, users.country, users.state, users.address, purchases.paid_on, purchases.delivery_status, purchased.name, purchased.brand, purchased.quantity from purchased, purchases, carts, users where purchaseid = purchases.id and cartid = carts.id and carts.userid = users.id and purchases.id not in (select purchaseid from deliveryassignment) order by purchases.id desc')
+    res = cur.fetchall()
+    if len(res) == 0: return jsonify({"detail": "No purchases"}), 400
+    purchases = []
+    id = res[0][0]
+    name = res[0][1]
+    lname = res[0][2]
+    country = res[0][3]
+    state = res[0][4]
+    address = res[0][5]
+    paid_on = res[0][6]
+    delivery_status = res[0][7]
+    purchase = []
+    for entry in res:
+        if entry[0] != id:
+            purchases.append(
+                {
+                    "id": id,
+                    "name": name,
+                    "lname": lname,
+                    "country": country,
+                    "state": state,
+                    "address": address,
+                    "paid_on": paid_on,
+                    "delivery_status": delivery_status,
+                    "items": purchase
+                }
+            )
+            id = entry[0]
+            name = entry[1]
+            lname = entry[2]
+            country = entry[3]
+            state = entry[4]
+            address = entry[5]
+            paid_on = entry[6]
+            delivery_status = entry[7]
+            purchase = []
+        purchase.append(
+            {
+                "name": entry[8],
+                "brand": entry[9],
+                "quantity": entry[10],
+            }
+        )
+    purchases.append(
+        {
+            "id": id,
+            "name": name,
+            "lname": lname,
+            "country": country,
+            "state": state,
+            "address": address,
+            "paid_on": paid_on,
+            "delivery_status": delivery_status,
+            "items": purchase
+        }
+    )
+    return jsonify(purchases), 200
+
+@app.route('/admin/delivery', methods=['PATCH'])
+@cross_origin(origin="*")
+def update_delivery():
+    cur = conn.cursor() 
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    if not delivVerify(token): return jsonify({"detail": "Unauthorized"}), 400
+    if not requestVerify(['id'], request): return jsonify({"detail": "Insufficient arguments"}), 400
+    cur.execute('UPDATE purchases SET delivery_status = \'En delivery\' WHERE id = {0}'.format(request.json["id"]))
+    cur.execute('insert into deliveryassignment (userid, purchaseid) values ({0}, {1})'.format(getUserId(token), request.json["id"]))
+    conn.commit()
+    return jsonify({"detail": "Updated"}), 200 
+
+@app.route('/admin/delivery/me', methods=['GET'])
+@cross_origin(origin="*")
+def deliveryown():
+    cur = conn.cursor()
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    if not delivVerify(token): return jsonify({"detail": "Unauthorized"}), 400
+    cur.execute('SELECT purchases.id, users.name, users.lname, users.country, users.state, users.address, purchases.paid_on, purchases.delivery_status, purchased.name, purchased.brand, purchased.quantity from purchased, purchases, carts, users where purchaseid = purchases.id and cartid = carts.id and carts.userid = users.id and purchases.id in (select purchaseid from deliveryassignment where userid = {0}) order by purchases.id desc'.format(getUserId(token)))
+    res = cur.fetchall()
+    if len(res) == 0: return jsonify({"detail": "No purchases"}), 400
+    purchases = []
+    id = res[0][0]
+    name = res[0][1]
+    lname = res[0][2]
+    country = res[0][3]
+    state = res[0][4]
+    address = res[0][5]
+    paid_on = res[0][6]
+    delivery_status = res[0][7]
+    purchase = []
+    for entry in res:
+        if entry[0] != id:
+            purchases.append(
+                {
+                    "id": id,
+                    "name": name,
+                    "lname": lname,
+                    "country": country,
+                    "state": state,
+                    "address": address,
+                    "paid_on": paid_on,
+                    "delivery_status": delivery_status,
+                    "items": purchase
+                }
+            )
+            id = entry[0]
+            name = entry[1]
+            lname = entry[2]
+            country = entry[3]
+            state = entry[4]
+            address = entry[5]
+            paid_on = entry[6]
+            delivery_status = entry[7]
+            purchase = []
+        purchase.append(
+            {
+                "name": entry[8],
+                "brand": entry[9],
+                "quantity": entry[10],
+            }
+        )
+    purchases.append(
+        {
+            "id": id,
+            "name": name,
+            "lname": lname,
+            "country": country,
+            "state": state,
+            "address": address,
+            "paid_on": paid_on,
+            "delivery_status": delivery_status,
+            "items": purchase
+        }
+    )
+    return jsonify(purchases), 200
+
+@app.route('/admin/delivery/me', methods=['PATCH'])
+@cross_origin(origin="*")
+def update_delivery_assigned():
+    cur = conn.cursor() 
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    if not delivVerify(token): return jsonify({"detail": "Unauthorized"}), 400
+    if not requestVerify(['id'], request): return jsonify({"detail": "Insufficient arguments"}), 400
+    cur.execute('UPDATE purchases SET delivery_status = \'Entregado\' WHERE id = {0}'.format(request.json["id"]))
+    cur.execute('insert into deliveryassignment (userid, purchaseid) values ({0}, {1})'.format(getUserId(token), request.json["id"]))
+    conn.commit()
+    return jsonify({"detail": "Updated"}), 200 
+
+@app.route('/users/purchases/rate', methods=['POST'])
+@cross_origin(origin="*")
+def rate_delivery():
+    cur = conn.cursor() 
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    if not requestVerify(['id', 'rating'], request): return jsonify({"detail": "Insufficient arguments"}), 400
+    cur.execute('select from deliveryrating where userid = {0} and purchaseid = {1}'.format(getUserId(token), request.json["id"]))
+    res = cur.fetchall()
+    if len(res) > 0: return jsonify({"detail": "Already rated"}), 400
+    cur.execute('insert into deliveryrating (userid, purchaseid, rating) values ({0}, {1}, {2})'.format(getUserId(token), request.json["id"], request.json["rating"]))
+    conn.commit()
+    return jsonify({"detail": "Rated"}), 200
+
+@app.route('/products/img/<id>', methods=['GET'])
+@cross_origin(origin="*")
+def download_img(id):
+    try: res = send_from_directory(app.config["UPLOAD_FOLDER"], id)
+    except: return send_from_directory(app.config["UPLOAD_FOLDER"], "default.png")
+    return res
+
+@app.route('/products/img', methods=['POST'])
+@cross_origin(origin="*")
+def upload_file():
+    if "id" not in request.args: return jsonify({"detail": "Insufficient arguments"})
+    if 'file' not in request.files:
+        return jsonify({"detail": "No image arg"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"detail": "No image"}), 400
+    if file:
+        filename: str = request.args["id"] + '.png'
+        file.save(str(Path(app.config['UPLOAD_FOLDER']) / filename))
+        return jsonify({"detail": "Uploaded"}), 200
 
 if __name__ == '__main__':
     app.run(host='192.168.0.18', debug=True)
