@@ -348,7 +348,8 @@ def product_update():
         return jsonify({"detail": "Unauthorized"}), 400
     if not requestVerify(['id', 'name', 'brand', 'description', 'price', 'discount', 'discount_type', 'stock'], request):
         return jsonify({"detail": "Insufficient arguments"}), 400
-    cur.execute('UPDATE products SET name = \'{1}\', brand = \'{2}\', description = \'{3}\', price = {4}, discount = {5}, discount_type = \'{6}\', stock = {7} WHERE id = {0}'.format(request.json["id"], request.json["name"], request.json["brand"], request.json["description"], request.json["price"], request.json["discount"], request.json["discount_type"], request.json["stock"]))
+    cur.execute('UPDATE products SET name = \'{1}\', brand = \'{2}\', description = \'{3}\', price = {4}, discount = {5}, discount_type = \'{6}\', stock = {7} WHERE id = {0}'
+                .format(request.json["id"], request.json["name"].replace("'", "''"), request.json["brand"].replace("'", "''"), request.json["description"].replace("'", "''"), request.json["price"], request.json["discount"], request.json["discount_type"].replace("'", "''"), request.json["stock"]))
     conn.commit()
     return jsonify({"detail": "Updated"}), 200
 
@@ -365,7 +366,8 @@ def product_add():
         return jsonify({"detail": "Unauthorized"}), 400
     if not requestVerify(['name', 'brand', 'description', 'price', 'discount', 'discount_type', 'stock'], request):
         return jsonify({"detail": "Insufficient arguments"}), 400
-    cur.execute('INSERT INTO products (name, brand, description, price, discount, discount_type, stock) VALUES (\'{0}\', \'{1}\', \'{2}\', {3}, {4}, \'{5}\', {6})'.format(request.json["name"], request.json["brand"], request.json["description"], request.json["price"], request.json["discount"], request.json["discount_type"], request.json["stock"]))
+    cur.execute('INSERT INTO products (name, brand, description, price, discount, discount_type, stock) VALUES (\'{0}\', \'{1}\', \'{2}\', {3}, {4}, \'{5}\', {6})'
+                .format(request.json["name"].replace("'", "''"), request.json["brand"].replace("'", "''"), request.json["description"].replace("'", "''"), request.json["price"], request.json["discount"], request.json["discount_type"].replace("'", "''"), request.json["stock"]))
     conn.commit()
     return jsonify({"detail": "Inserted"}), 200
 
@@ -466,7 +468,7 @@ def users_update():
     if not adminVerify(token): return jsonify({"detail": "Unauthorized"}), 400
     if not requestVerify(['id', 'name', 'lname', 'email', 'role', 'country', 'address', 'state', 'password'], request): return jsonify({"detail": "Insufficient arguments"}), 400
     cur.execute('UPDATE users SET name = \'{0}\', lname = \'{1}\', email = \'{2}\', role = \'{3}\', country = \'{4}\', address = \'{5}\', state = \'{6}\', password = \'{8}\' WHERE id = {7}'
-                .format(request.json["name"], request.json["lname"], request.json["email"], request.json["role"], request.json["country"], request.json["address"], request.json["state"], request.json["id"], request.json["password"]))
+                .format(request.json["name"].replace("'", "''"), request.json["lname"].replace("'", "''"), request.json["email"].replace("'", "''"), request.json["role"].replace("'", "''"), request.json["country"].replace("'", "''"), request.json["address"].replace("'", "''"), request.json["state"].replace("'", "''"), request.json["id"], request.json["password"].replace("'", "''")))
     conn.commit()
     return jsonify({"detail": "User updated"}), 200 
 
@@ -770,10 +772,25 @@ def rate_delivery():
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
     if not requestVerify(['id', 'rating'], request): return jsonify({"detail": "Insufficient arguments"}), 400
-    cur.execute('select from deliveryrating where userid = {0} and purchaseid = {1}'.format(getUserId(token), request.json["id"]))
+    cur.execute('select id from deliveryrating where userid = {0} and purchaseid = {1}'.format(getUserId(token), request.json["id"]))
     res = cur.fetchall()
-    if len(res) > 0: return jsonify({"detail": "Already rated"}), 400
-    cur.execute('insert into deliveryrating (userid, purchaseid, rating) values ({0}, {1}, {2})'.format(getUserId(token), request.json["id"], request.json["rating"]))
+    if len(res) > 0: cur.execute('update deliveryrating set rating = {2} where userid = {0} and purchaseid = {1}'.format(getUserId(token), request.json["id"], request.json["rating"]))
+    else: cur.execute('insert into deliveryrating (userid, purchaseid, rating) values ({0}, {1}, {2})'.format(getUserId(token), request.json["id"], request.json["rating"]))
+    conn.commit()
+    return jsonify({"detail": "Rated"}), 200
+
+@app.route('/users/products/rate', methods=['POST'])
+@cross_origin(origin="*")
+def rate_product():
+    cur = conn.cursor() 
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    if not requestVerify(['id', 'rating'], request): return jsonify({"detail": "Insufficient arguments"}), 400
+    cur.execute('select id from productrating where userid = {0} and productid = {1}'.format(getUserId(token), request.json["id"]))
+    res = cur.fetchall()
+    if len(res) > 0: cur.execute('update productrating set rating = {2} where userid = {0} and productid = {1}'.format(getUserId(token), request.json["id"], request.json["rating"]))
+    else: cur.execute('insert into productrating (userid, productid, rating) values ({0}, {1}, {2})'.format(getUserId(token), request.json["id"], request.json["rating"]))
     conn.commit()
     return jsonify({"detail": "Rated"}), 200
 
