@@ -27,7 +27,8 @@ CREATE TABLE products (id serial PRIMARY KEY,
 					   discount_type char(1) NOT NULL DEFAULT 'P',
 					   stock integer DEFAULT 0,
 					   deleted varchar(1) DEFAULT 'N',
-					   date_added date DEFAULT CURRENT_TIMESTAMP);
+					   date_added date DEFAULT CURRENT_TIMESTAMP,
+					   stripeid text default '');
 drop table products cascade;
 select * from products;
 
@@ -92,27 +93,27 @@ CREATE TABLE deliveryassignment (id serial PRIMARY KEY,
                                  );
 
 CREATE TABLE bitacora (id serial PRIMARY KEY,
-						userid serial REFERENCES users(id) NOT NULL,
+						username text NOT NULL,
+						user role varchar(50) not null,
+						user email text not null,
 						action text NOT NULL,
 						ip text NOT NULL,
 						datetime timestamp DEFAULT CURRENT_TIMESTAMP);
+drop table bitacora;
 
-SELECT purchases.id, users.name, users.lname, users.country, users.state, users.address, purchases.paid_on, purchases.delivery_status, purchased.name, purchased.brand, purchased.quantity from purchased, purchases, carts, users where purchaseid = purchases.id and cartid = carts.id and carts.userid = users.id and purchases.id in (select purchaseid from deliveryassignment where userid = 1) order by purchases.id desc;
-insert into deliveryassignment (userid, purchaseid) values (1, 2);
-SELECT products.*, cast(coalesce(avg(rating) filter (where productid = products.id), 0) AS DECIMAL(2,1)) FROM products, productrating WHERE deleted = 'N' group by products.id ORDER BY products.id DESC;
+CREATE TABLE purchase_confirmations(id serial PRIMARY KEY,
+					                token varchar(50) NOT NULL,
+									 cartid serial REFERENCES carts(id) NOT NULL,
+									 userid serial REFERENCES users(id) NOT NULL,
+									 vip varchar(1) NOT NULL,
+									 confirmed varchar(1) NOT NULL);
+drop table purchase_confirmations;
+select * from purchase_confirmations;
 
-SELECT products.id, name, description, price, discount, discount_type, stock, date_added, brand, cast(coalesce(avg(rating) filter (where productid = products.id), 0) as decimal(2,1)) FROM products, productrating WHERE products.id = 1 group by products.id;
+SELECT products.id, name, description, quantity, case when discount = 0 then CAST(price AS decimal(12,2)) when discount_type = 'P' then CAST(price*(1-(discount*0.01)) AS decimal(12,2)) else CAST(price-discount AS decimal(12,2)) end as fprice FROM cart_entries, products WHERE products.id = productid and cartid = 36 ORDER BY cart_entries.id DESC;
 
-SELECT purchases.*, purchased.*, cast(coalesce(avg(rating) filter (where productrating.productid = purchased.productid), 0) as decimal(2,1)) from purchased, purchases, carts, productrating where purchaseid = purchases.id and cartid = carts.id and carts.userid = 1 order by purchases.id desc;
+select users.* from users where users.id not in (select userid from carts) and deleted = 'N';
 
-select products.*, count(purchased.productid), cast(coalesce(avg(rating) filter (where productrating.productid = products.id), 0) AS DECIMAL(2,1)) from purchased, products, productrating 
-        where products.id = purchased.productid and purchased.productid != 5 and products.deleted = 'N'
-        and purchaseid in (select purchaseid from purchased, purchases 
-                        where purchaseid = purchases.id and productid = 5 
-                        and purchases.paid_on > (NOW() - interval ' 6 months')) 
-        group by products.id order by count desc limit 5;
-
-		
 insert into productrating (userid, productid, rating) values (3, 1, 3.5);
 insert into products (name, brand, description, price) VALUES ('Nintendo Switch', 'Nintendo', 'Consola de videojuegos', 300);
 insert into products (name, brand, description, price) VALUES ('Nintendo Switch Lite', 'Nintendo', 'Consola de videojuegos', 250);

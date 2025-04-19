@@ -1,9 +1,11 @@
-from flask import Flask, request, jsonify, abort, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, redirect # type: ignore
 from flask_cors import CORS, cross_origin # type: ignore
 from secrets import token_urlsafe
 import psycopg2 # type: ignore
 from pathlib import Path
+from stripe import StripeClient # type: ignore
 
+client = StripeClient("STRIPE KEY HERE")
 
 UPLOAD_FOLDER = str(Path(__file__).parent / 'assets')
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg'}
@@ -60,6 +62,20 @@ def isVip(token):
     res = cur.fetchall()
     return res[0][0] >= 1000
 
+def insertBitacora(id, action, ip):
+    cur = conn.cursor()
+    cur.execute('select name, lname, email, role from users where id = {0}'.format(id))
+    res = cur.fetchall()
+    cur.execute('Insert into bitacora (username, email, role, ip, action) values (%s, %s, %s, %s, %s)',
+                (
+                    "{0} {1}".format(res[0][0], res[0][1]),
+                    res[0][2],
+                    res[0][3],
+                    ip,
+                    action
+                ))
+    conn.commit()
+
 @app.route('/auth/login/email', methods=['POST', 'OPTIONS'])
 @cross_origin(origin="*")
 def email_login():
@@ -72,6 +88,7 @@ def email_login():
     res = cur.fetchall()
     print(res)
     if (len(res) == 0): return jsonify({"detail": "Incorrect email and/or password."}), 400
+    insertBitacora(res[0][0], "Ingresó al sistema", request.remote_addr)
     return jsonify({
         "access_token": res[0][1],
         "id": res[0][0]
@@ -103,6 +120,7 @@ def register():
     conn.commit()
     cur.execute('SELECT id FROM users WHERE email = \'{0}\' AND deleted = \'N\''.format(json["email"]))
     res = cur.fetchall()
+    insertBitacora(res[0][0], "Se registró en el sistema", request.remote_addr)
     cur.execute('INSERT INTO carts (userid) VALUES ({0})'.format(res[0][0]))
     conn.commit()
     return jsonify({"access_token": token, "id": res[0][0]}), 200 
@@ -150,7 +168,7 @@ def prod():
             "discount_type": prod[6],
             "stock": prod[7],
             "brand": prod[2],
-            "rating": prod[10]
+            "rating": prod[11]
             })
     print(prods)    
     return jsonify(prods), 200
@@ -175,7 +193,7 @@ def prod_search():
             "discount_type": prod[6],
             "stock": prod[7],
             "brand": prod[2],
-            "rating": prod[10]
+            "rating": prod[11]
             })
     print(prods)    
     return jsonify(prods), 200
@@ -211,7 +229,7 @@ def prod_get():
             "discount_type": item[6],
             "stock": item[7],
             "date_added": item[9],
-            "rating": item[11],
+            "rating": item[12],
             }
         )
     cur.execute('SELECT products.id, name, description, price, discount, discount_type, stock, date_added, brand, cast(coalesce(avg(rating) filter (where productid = products.id), 0) as decimal(2,1)) FROM products, productrating WHERE products.id = {0} group by products.id'.format(id))
@@ -250,6 +268,9 @@ def cart_add():
     else:
         cur.execute('UPDATE cart_entries SET quantity = quantity + 1 WHERE id = {0}'.format(res[0][0]))
     conn.commit()
+    cur.execute('select name from products where id = {0}'.format(request.json["id"]))
+    res = cur.fetchall()
+    insertBitacora(getUserId(token), "Añadió \"{0}\" a su carrito.".format(res[0][0]).replace("'", "''"), request.remote_addr)    
     cur.execute('SELECT id, cartid, productid, quantity FROM cart_entries WHERE cartid = {0} AND productid = {1}'.format(currentCart, request.json["id"]))
     res = cur.fetchall()
     return jsonify({
@@ -311,6 +332,7 @@ def cart_delete():
     currentCart = res[0][0]
     cur.execute('DELETE FROM cart_entries WHERE cartid = {0}'.format(currentCart))
     conn.commit()
+    insertBitacora(getUserId(token), "Vació su carrito.", request.remote_addr)    
     return jsonify({"id": currentCart}), 200
 
   
@@ -327,6 +349,9 @@ def cart_update():
     if not requestVerify(['id', 'quantity'], request):
         return jsonify({"detail": "Insufficient arguments"}), 400
     cur.execute('UPDATE cart_entries SET quantity = {0} WHERE id = {1}'.format(request.json["quantity"], request.json["id"]))
+    cur.execute('select products.name from products, cart_entries where cart_entries.id = {0} and productid = products.id'.format(request.json["id"]))
+    res = cur.fetchall()
+    insertBitacora(getUserId(token), "Actualizó \"{0}\" en su carrito.".format(res[0][0]).replace("'", "''"), request.remote_addr)    
     cur.execute('SELECT * FROM cart_entries WHERE id = {0}'.format(request.json["id"]))
     res = cur.fetchall()
     return jsonify({
@@ -350,6 +375,7 @@ def product_update():
         return jsonify({"detail": "Insufficient arguments"}), 400
     cur.execute('UPDATE products SET name = \'{1}\', brand = \'{2}\', description = \'{3}\', price = {4}, discount = {5}, discount_type = \'{6}\', stock = {7} WHERE id = {0}'
                 .format(request.json["id"], request.json["name"].replace("'", "''"), request.json["brand"].replace("'", "''"), request.json["description"].replace("'", "''"), request.json["price"], request.json["discount"], request.json["discount_type"].replace("'", "''"), request.json["stock"]))
+    insertBitacora(getUserId(token), "Actualizó el producto: \"{0}\"".format(request.json["name"]).replace("'", "''"), request.remote_addr)    
     conn.commit()
     return jsonify({"detail": "Updated"}), 200
 
@@ -369,6 +395,7 @@ def product_add():
     cur.execute('INSERT INTO products (name, brand, description, price, discount, discount_type, stock) VALUES (\'{0}\', \'{1}\', \'{2}\', {3}, {4}, \'{5}\', {6})'
                 .format(request.json["name"].replace("'", "''"), request.json["brand"].replace("'", "''"), request.json["description"].replace("'", "''"), request.json["price"], request.json["discount"], request.json["discount_type"].replace("'", "''"), request.json["stock"]))
     conn.commit()
+    insertBitacora(getUserId(token), "Insertó el producto: \"{0}\"".format(request.json["name"]).replace("'", "''"), request.remote_addr)    
     return jsonify({"detail": "Inserted"}), 200
 
 @app.route('/users/cart/remove', methods=['DELETE'])
@@ -379,6 +406,9 @@ def cart_entry_delete():
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token):
         return jsonify({"detail": "Invalid token"}), 400
+    cur.execute('select products.name from products, cart_entries where cart_entries.id = {0} and productid = products.id'.format(request.args["id"]))
+    res = cur.fetchall()
+    insertBitacora(getUserId(token), "Eliminó \"{0}\" de su carrito.".format(res[0][0]).replace("'", "''"), request.remote_addr)   
     cur.execute('DELETE FROM cart_entries WHERE id = {0}'.format(request.args["id"]))
     conn.commit()
     return jsonify({"detail": "Entry removed"}), 200
@@ -391,7 +421,9 @@ def product_delete():
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
     if not adminVerify(token): return jsonify({"detail": "Unauthorized"}), 400
-
+    cur.execute('select name from products where id = {0}'.format(request.args["id"]))
+    res = cur.fetchall()
+    insertBitacora(getUserId(token), "Eliminó el producto: \"{0}\"".format(res[0][0]).replace("'", "''"), request.remote_addr)  
     cur.execute('UPDATE products SET deleted = \'Y\' WHERE id = {0}'.format(request.args["id"]))
     conn.commit()
     return jsonify({"detail": "Product deleted"}), 200
@@ -409,6 +441,7 @@ def users_add():
     cur.execute('SELECT email FROM users WHERE email = \'{0}\' AND deleted = \'N\''.format(request.json["email"]))
     res = cur.fetchall()
     if (len(res) != 0): return jsonify({"detail": "Email exists"}), 400
+    insertBitacora(getUserId(request.headers.get('Authorization').split()[1]), "Insertó el usuario: \"{0}\"".format("{0} {1}".format(request.json["name"], request.json["lname"])).replace("'", "''"), request.remote_addr)  
     cur.execute('INSERT INTO users (email, password, name, lname, role, address, state, country, token)'
         'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
         (
@@ -424,7 +457,7 @@ def users_add():
             )
         )
     conn.commit()
-    cur.execute('SELECT id FROM users WHERE email = \'{0}\''.format(request.json["email"]))
+    cur.execute('SELECT id FROM users WHERE email = \'{0}\' and deleted = \'N\''.format(request.json["email"]))
     res = cur.fetchall()
     cur.execute('INSERT INTO carts (userid) VALUES ({0})'.format(res[0][0]))
     conn.commit()
@@ -470,6 +503,7 @@ def users_update():
     cur.execute('UPDATE users SET name = \'{0}\', lname = \'{1}\', email = \'{2}\', role = \'{3}\', country = \'{4}\', address = \'{5}\', state = \'{6}\', password = \'{8}\' WHERE id = {7}'
                 .format(request.json["name"].replace("'", "''"), request.json["lname"].replace("'", "''"), request.json["email"].replace("'", "''"), request.json["role"].replace("'", "''"), request.json["country"].replace("'", "''"), request.json["address"].replace("'", "''"), request.json["state"].replace("'", "''"), request.json["id"], request.json["password"].replace("'", "''")))
     conn.commit()
+    insertBitacora(getUserId(token), "Actualizó al usuario: \"{0}\"".format("{0} {1}".format(request.json["name"], request.json["lname"])).replace("'", "''"), request.remote_addr) 
     return jsonify({"detail": "User updated"}), 200 
 
 @app.route('/admin/users/remove', methods=['DELETE'])
@@ -480,9 +514,11 @@ def users_delete():
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
     if not adminVerify(token): return jsonify({"detail": "Unauthorized"}), 400
-
     cur.execute('UPDATE users SET deleted = \'Y\' WHERE id = {0}'.format(request.args["id"]))
     conn.commit()
+    cur.execute('select name, lname from users where id = {0}'.format(request.args["id"]))
+    res = cur.fetchall()
+    insertBitacora(getUserId(token), "Eliminó al usuario: \"{0}\"".format("{0} {1}".format(res[0][0], res[0][1])).replace("'", "''"), request.remote_addr) 
     return jsonify({"detail": "Product deleted"}), 200
 
 @app.route('/users/cart/checkout', methods=['POST'])
@@ -680,6 +716,7 @@ def update_delivery():
     if not requestVerify(['id'], request): return jsonify({"detail": "Insufficient arguments"}), 400
     cur.execute('UPDATE purchases SET delivery_status = \'En delivery\' WHERE id = {0}'.format(request.json["id"]))
     cur.execute('insert into deliveryassignment (userid, purchaseid) values ({0}, {1})'.format(getUserId(token), request.json["id"]))
+    insertBitacora(getUserId(token), "Tomó el pedido {0}.".format(request.json["id"]), request.remote_addr) 
     conn.commit()
     return jsonify({"detail": "Updated"}), 200 
 
@@ -762,6 +799,7 @@ def update_delivery_assigned():
     cur.execute('UPDATE purchases SET delivery_status = \'Entregado\' WHERE id = {0}'.format(request.json["id"]))
     cur.execute('insert into deliveryassignment (userid, purchaseid) values ({0}, {1})'.format(getUserId(token), request.json["id"]))
     conn.commit()
+    insertBitacora(getUserId(token), "Entregó el pedido {0}.".format(request.json["id"]), request.remote_addr) 
     return jsonify({"detail": "Updated"}), 200 
 
 @app.route('/users/purchases/rate', methods=['POST'])
@@ -777,6 +815,7 @@ def rate_delivery():
     if len(res) > 0: cur.execute('update deliveryrating set rating = {2} where userid = {0} and purchaseid = {1}'.format(getUserId(token), request.json["id"], request.json["rating"]))
     else: cur.execute('insert into deliveryrating (userid, purchaseid, rating) values ({0}, {1}, {2})'.format(getUserId(token), request.json["id"], request.json["rating"]))
     conn.commit()
+    insertBitacora(getUserId(token), "Calificó el pedido {0} con {1}.".format(request.json["id"], request.json["rating"]), request.remote_addr) 
     return jsonify({"detail": "Rated"}), 200
 
 @app.route('/users/products/rate', methods=['POST'])
@@ -792,6 +831,9 @@ def rate_product():
     if len(res) > 0: cur.execute('update productrating set rating = {2} where userid = {0} and productid = {1}'.format(getUserId(token), request.json["id"], request.json["rating"]))
     else: cur.execute('insert into productrating (userid, productid, rating) values ({0}, {1}, {2})'.format(getUserId(token), request.json["id"], request.json["rating"]))
     conn.commit()
+    cur.execute('select name from products where id = {0}'.format(request.json["id"]))
+    res = cur.fetchall()
+    insertBitacora(getUserId(token), "Calificó el producto \"{0}\" con {1}".format(res[0][0], request.json["rating"]).replace("'", "''"), request.remote_addr) 
     return jsonify({"detail": "Rated"}), 200
 
 @app.route('/products/img/<id>', methods=['GET'])
@@ -814,6 +856,143 @@ def upload_file():
         filename: str = request.args["id"] + '.png'
         file.save(str(Path(app.config['UPLOAD_FOLDER']) / filename))
         return jsonify({"detail": "Uploaded"}), 200
+  
+@app.route('/stripe/checkout', methods=['GET'])
+@cross_origin(origin='*')
+def stripe_checkout_create():
+    cur = conn.cursor()
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    cur.execute('SELECT id FROM carts WHERE userid = {0} AND paid = \'N\''.format(getUserId(token)))
+    res = cur.fetchall()
+    currentCart = res[0][0]
+    cur.execute('SELECT products.id, name, description, quantity, case when discount = 0 then CAST(price AS decimal(12,2)) when discount_type = \'P\' then CAST(price*(1-(discount*0.01)) AS decimal(12,2)) else CAST(price-discount AS decimal(12,2)) end as fprice FROM cart_entries, products WHERE products.id = productid and cartid = {0} ORDER BY cart_entries.id DESC'.format(currentCart))
+    res = cur.fetchall()
+    line_items = []
+    for item in res:
+        line_items.append(
+            {
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {
+                        "name": item[1],
+                        "description": item[2],
+                        "images": ["http://l0nk5erver.duckdns.org:5000/products/img/{0}.png".format(item[0])]
+                    },
+                    "unit_amount": ("%.2f" % item[4]).replace('.', '')
+                }, 
+                "quantity": item[3]
+            }
+        )
+    print(line_items)
+    vip = isVip(token)
+    userid = getUserId(token)
+    token = token_urlsafe()
+    cur.execute('INSERT INTO purchase_confirmations (token, cartid, vip, userid, confirmed) VALUES (\'{0}\', {1}, \'{2}\', {3}, \'N\')'.format(token, currentCart, 'Y' if vip else 'N', userid))
+    conn.commit()
+    if vip:
+        checkout = client.checkout.sessions.create(params = 
+                                        {
+                                            "success_url":"http://l0nk5erver.duckdns.org:5000/stripe/confirm?t={0}".format(token),
+                                            "line_items": line_items,
+                                            "mode":"payment",
+                                            "locale": "es",
+                                            "discounts": [{"coupon": "68wVLueJ"}]
+                                        })
+    else: 
+        checkout = client.checkout.sessions.create(params = 
+                                        {
+                                            "success_url":"http://l0nk5erver.duckdns.org:5000/stripe/confirm?t={0}".format(token),
+                                            "line_items": line_items,
+                                            "mode":"payment",
+                                            "locale": "es",
+                                        })
+    cur.close()
+    insertBitacora(getUserId(request.headers.get('Authorization').split()[1]), "Inició el pago de su carrito.", request.remote_addr) 
+    return jsonify({"url": checkout["url"]})
+
+@app.route('/stripe/confirm', methods=['GET'])
+@cross_origin(origin='*')
+def stripe_checkout_confirm():
+    if "t" not in request.args: return jsonify({"detail": "Insufficient arguments"})
+    cur = conn.cursor()
+    cur.execute('SELECT cartid, vip, userid, confirmed FROM purchase_confirmations WHERE token = \'{0}\''.format(request.args["t"]))
+    res = cur.fetchall()
+    if res[0][3] == 'Y': 
+        print("Already confirmed")
+        return redirect("http://l0nk5erver.duckdns.org/purchases")
+    currentCart = res[0][0]
+    vip = res[0][1]
+    userid = res[0][2]
+    cur.execute('''
+                insert into purchases (cartid, total_paid, vip) 
+                SELECT carts.id, 
+                sum(
+                    case 
+                        when discount = 0 then CAST(price*quantity AS decimal(12,2)) 
+                        when discount_type = 'P' then CAST((price*(1-(discount*0.01)))*quantity AS decimal(12,2)) 
+                        else CAST((price-discount)*quantity AS decimal(12,2)) 
+                    end) as tprice, '{1}' 
+                from products, cart_entries, carts where 
+                    products.id = productid and 
+                    deleted = 'N' and 
+                    cartid = carts.id and 
+                    carts.id = {0} group by carts.id;
+        '''.format(currentCart, vip))
+    cur.execute('''
+                insert into purchased (purchaseid, productid, name, brand, price, dprice, quantity, fprice) 
+                    select 
+                        (select id from purchases where cartid = {0} group by id) as purchaseid, 
+                        products.id, name, brand, price, 
+                        case 
+                            when discount = 0 then CAST(price AS decimal(12,2)) 
+                            when discount_type = 'P' then CAST(price*(1-(discount*0.01)) AS decimal(12,2)) 
+                            else CAST(price-discount AS decimal(12,2)) 
+                        end as dprice, quantity,
+                        case 
+                            when discount = 0 then CAST(price*quantity AS decimal(12,2)) 
+                            when discount_type = 'P' then CAST((price*(1-(discount*0.01)))*quantity AS decimal(12,2)) 
+                            else CAST((price-discount)*quantity AS decimal(12,2)) 
+                        end as fprice 
+                        from products, cart_entries where 
+                        products.id = cart_entries.productid and 
+                        products.deleted = 'N' and cart_entries.cartid = {0};
+        '''.format(currentCart))
+    cur.execute('select userid from carts where id = {0}'.format(currentCart))
+    res = cur.fetchall()
+    userid = res[0][0]
+    cur.execute('update purchase_confirmations set confirmed = \'Y\' where token = \'{0}\''.format(request.args["t"]))
+    cur.execute('update carts set paid = \'Y\' where id = {0};'.format(currentCart))
+    cur.execute('insert into carts (userid) values ({0});'.format(userid))
+    conn.commit()
+    insertBitacora(userid, "Finalizó el pago de su carrito.", request.remote_addr) 
+    return redirect("http://l0nk5erver.duckdns.org/purchases")
+
+@app.route('/admin/bitacora', methods=['GET'])
+@cross_origin(origin="*")
+def bitacora():
+    cur = conn.cursor()
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    if not adminVerify(token): return jsonify({"detail": "Unauthorized"}), 400
+    bitacora = []
+    cur.execute('select * from bitacora order by id desc')
+    res = cur.fetchall()
+    for item in res:
+        bitacora.append({
+            "username": item[1],
+            "role": item[2],
+            "email": item[3],
+            "action": item[4],
+            "ip": item[5],
+            "datetime": item[6],
+        })
+    return jsonify(bitacora), 200
+    
+
+
 
 if __name__ == '__main__':
     app.run(host='192.168.0.18', debug=True)
