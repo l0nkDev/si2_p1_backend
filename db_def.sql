@@ -94,12 +94,13 @@ CREATE TABLE deliveryassignment (id serial PRIMARY KEY,
 
 CREATE TABLE bitacora (id serial PRIMARY KEY,
 						username text NOT NULL,
-						user role varchar(50) not null,
-						user email text not null,
+						role varchar(50) not null,
+						email text not null,
 						action text NOT NULL,
 						ip text NOT NULL,
 						datetime timestamp DEFAULT CURRENT_TIMESTAMP);
 drop table bitacora;
+select * from bitacora;
 
 CREATE TABLE purchase_confirmations(id serial PRIMARY KEY,
 					                token varchar(50) NOT NULL,
@@ -113,6 +114,10 @@ select * from purchase_confirmations;
 SELECT products.id, name, description, quantity, case when discount = 0 then CAST(price AS decimal(12,2)) when discount_type = 'P' then CAST(price*(1-(discount*0.01)) AS decimal(12,2)) else CAST(price-discount AS decimal(12,2)) end as fprice FROM cart_entries, products WHERE products.id = productid and cartid = 36 ORDER BY cart_entries.id DESC;
 
 select users.* from users where users.id not in (select userid from carts) and deleted = 'N';
+
+select purchases.*, purchased.*, users.name, users.lname, users.id from purchases, purchased, users, carts where cartid = carts.id and carts.userid = users.id and purchaseid = purchases.id and purchases.id = 2;
+
+select products.id, products.name, products.brand, products.price, case when products.discount = 0 then products.discount when products.discount_type = 'P' then CAST(products.price*(products.discount*0.01) AS decimal(12,2)) else CAST(products.discount AS decimal(12,2)) end as discounted, case when products.discount = 0 then CAST(products.price AS decimal(12,2)) when products.discount_type = 'P' then CAST(products.price*(1-(products.discount*0.01)) AS decimal(12,2)) else CAST(products.price-products.discount AS decimal(12,2)) end as final, products.stock, sum(quantity) as units_sold from products, purchased where deleted = 'N' and purchased.productid = products.id group by products.id order by id desc
 
 insert into productrating (userid, productid, rating) values (3, 1, 3.5);
 insert into products (name, brand, description, price) VALUES ('Nintendo Switch', 'Nintendo', 'Consola de videojuegos', 300);

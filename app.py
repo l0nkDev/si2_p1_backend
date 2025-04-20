@@ -4,8 +4,9 @@ from secrets import token_urlsafe
 import psycopg2 # type: ignore
 from pathlib import Path
 from stripe import StripeClient # type: ignore
-import pdfkit # type: ignore
 import htmlhelper
+import reportehelper
+import pdfkit # type: ignore
 
 client = StripeClient("")
 
@@ -103,20 +104,23 @@ def register():
     token = token_urlsafe()
     json = request.json
     print(request.json)
-    if not requestVerify(['email', 'password', 'name', 'lname'], request):
+    if not requestVerify(['email', 'password', 'name', 'lname', 'country', 'state', 'address'], request):
         return jsonify({"detail": "Insufficient arguments"}), 400
     cur.execute('SELECT email FROM users WHERE email = \'{0}\' AND deleted = \'N\''.format(request.json["email"]))
     res = cur.fetchall()
     if (len(res) != 0): return jsonify({"detail": "Email exists"}), 400
-    cur.execute('INSERT INTO users (email, password, name, lname, role, token)'
-        'VALUES (%s, %s, %s, %s, %s, %s)',
+    cur.execute('INSERT INTO users (email, password, name, lname, role, token, country, state, address)'
+        'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
         (
             json["email"],
             json["password"],
             json["name"],
             json["lname"],
             "guest",
-            token
+            token,
+            json["country"],
+            json["state"],
+            json["address"],
             )
         )
     conn.commit()
@@ -150,6 +154,31 @@ def self():
         "token": token,
         'vip': 'Y' if isVip(token) else 'N'
         }), 200 
+
+@app.route('/users/self', methods=['PATCH'])
+@cross_origin(origin="*")
+def update_self():
+    cur = conn.cursor() 
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    if not requestVerify(['email', 'password', 'name', 'lname', 'country', 'state', 'address'], request): return jsonify({"detail": "Insufficient arguments"}), 400
+    cur.execute('update users set email = %s, password = %s, name = %s, lname = %s, country = %s, state = %s, address = %s where id = %s', (
+        request.json["email"],
+        request.json["password"],
+        request.json["name"],
+        request.json["lname"],
+        request.json["country"],
+        request.json["state"],
+        request.json["address"],
+        getUserId(token)
+    ))
+    insertBitacora(getUserId(token), "Actualizó sus datos personales.", request.remote_addr)
+    conn.commit()
+    return jsonify({"detail": "updated"}), 200
+
+
+
 
 @app.route('/products', methods=['GET'])
 @cross_origin(origin="*")
@@ -995,13 +1024,46 @@ def bitacora():
     
 @app.route('/facturas/<n>', methods=['GET'])
 @cross_origin(origin="*")
-def reportes(n): 
+def facturas(n): 
     pdf = pdfkit.from_string(htmlhelper.factura(n), False)
     response = make_response(pdf)
     response.headers["Content-Type"] = "application/pdf"
     response.headers["Content-Disposition"] = "inline; filename=output.pdf"
     return response
-
+    
+@app.route('/reportes/<base>/<criteria>/<order>/<since>/<until>/<format>', methods=['GET'])
+@cross_origin(origin="*")
+def reportes(base, criteria, order, since, until, format): 
+    if base == 'products':
+        query = '''
+                select products.id, products.name, products.brand, products.price, 
+                case 
+                    when products.discount = 0 then products.discount 
+                    when products.discount_type = 'P' then CAST(products.price*(products.discount*0.01) AS decimal(12,2)) 
+                    else CAST(products.discount AS decimal(12,2)) 
+                end as discounted, 
+                case 
+                    when products.discount = 0 then CAST(products.price AS decimal(12,2)) 
+                    when products.discount_type = 'P' then CAST(products.price*(1-(products.discount*0.01)) AS decimal(12,2)) 
+                    else CAST(products.price-products.discount AS decimal(12,2)) 
+                end as final, products.stock, sum(quantity) as units_sold,
+                cast(sum( case when purchases.vip = 'N' then fprice else fprice*0.85 end) as decimal(12,2)) as earnings
+                from products, purchased, purchases 
+                where deleted = 'N' and purchased.productid = products.id and purchases.id = purchaseid 
+                and paid_on >= '{1}' and paid_on <= '{2}' group by products.id order by {0} {3};
+                '''.format(criteria, since, until, order)
+        return reportehelper.reportes('PRODUCTOS', query, ['ID', 'Nombre', 'Marca', 'Precio', 'Descuento', 'Precio final', 'stock', 'Ventas', 'Ganancias'], format)
+    if base == 'users':
+        query = '''
+                select users.id, users.name, users.lname, users.email, users.role, users.country, users.state, users.address, 
+                (select count(*) from (select userid from deliveryassignment, purchases where userid = users.id and purchaseid = purchases.id and paid_on >= '{1}' and paid_on <= '{2}' group by userid, purchaseid)) as deliveries_taken,
+                (select count(*) from (select userid from deliveryassignment, purchases where userid = users.id and purchaseid = purchases.id and purchases.delivery_status = 'Entregado' and paid_on >= '{1}' and paid_on <= '{2}' group by userid, purchaseid)) as deliveries_completed,
+                (select count(*) from (select userid from purchases, carts where carts.id = cartid and userid = users.id and purchases.paid_on >= '{1}' and purchases.paid_on <= '{2}')) as orders_made,
+                (select coalesce(sum(quantity), 0) from (select quantity from purchased, purchases, carts where carts.id = cartid and purchaseid = purchases.id and userid = users.id and purchases.paid_on >= '{1}' and purchases.paid_on <= '{2}')) as products_purchased,
+                (select cast(coalesce(sum(spent), 0) as decimal(12,2)) from (select case when purchases.vip = 'N' then purchases.total_paid else purchases.total_paid*0.85 end as spent from purchased, purchases, carts where carts.id = cartid and purchaseid = purchases.id and userid = users.id and purchases.paid_on >= '{1}' and purchases.paid_on <= '{2}')) as money_spent
+                from users where users.deleted = 'N' group by users.id order by {0} {3};
+                '''.format(criteria, since, until, order)
+        return reportehelper.reportes('USUARIOS', query, ['ID', 'Nombre', 'Apellido', 'e-mail', 'Rol', 'Pais', 'Estado/departamento', 'Direccion', 'Ordenes tomadas', 'Ordenes completadas', 'Pedidos', 'Compras', 'Monto gastado'], format)
 
 
 if __name__ == '__main__':

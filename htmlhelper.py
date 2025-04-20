@@ -228,7 +228,7 @@ def factura(purchaseid):
                 </tr>
                 <tr>
                     <td class="simple" colspan="4"></td>
-                    <td style="text-align: right">DESCUENTO</td>
+                    <td style="text-align: right">DESCUENTO VIP</td>
                     <td style="text-align: right">{1}</td>
                 </tr>
                 <tr>
