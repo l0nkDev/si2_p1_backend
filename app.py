@@ -1,11 +1,13 @@
-from flask import Flask, request, jsonify, send_from_directory, redirect # type: ignore
+from flask import Flask, request, jsonify, send_from_directory, redirect, render_template, make_response # type: ignore
 from flask_cors import CORS, cross_origin # type: ignore
 from secrets import token_urlsafe
 import psycopg2 # type: ignore
 from pathlib import Path
 from stripe import StripeClient # type: ignore
+import pdfkit # type: ignore
+import htmlhelper
 
-client = StripeClient("STRIPE KEY HERE")
+client = StripeClient("")
 
 UPLOAD_FOLDER = str(Path(__file__).parent / 'assets')
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg'}
@@ -991,6 +993,14 @@ def bitacora():
         })
     return jsonify(bitacora), 200
     
+@app.route('/facturas/<n>', methods=['GET'])
+@cross_origin(origin="*")
+def reportes(n): 
+    pdf = pdfkit.from_string(htmlhelper.factura(n), False)
+    response = make_response(pdf)
+    response.headers["Content-Type"] = "application/pdf"
+    response.headers["Content-Disposition"] = "inline; filename=output.pdf"
+    return response
 
 
 
