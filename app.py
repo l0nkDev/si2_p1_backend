@@ -1,3 +1,4 @@
+import firebase_admin.messaging
 from flask import Flask, request, jsonify, send_from_directory, redirect, render_template, make_response # type: ignore
 from flask_cors import CORS, cross_origin # type: ignore
 from secrets import token_urlsafe
@@ -7,7 +8,46 @@ from stripe import StripeClient # type: ignore
 import htmlhelper
 import reportehelper
 import pdfkit # type: ignore
+from google.oauth2 import service_account
+import google.auth.transport.requests
+import requests
+import json
 
+service_account_file = './si2-p1-mobile-firebase-adminsdk-fbsvc-6ccf13e44e.json'
+credentials = service_account.Credentials.from_service_account_file(
+    service_account_file, scopes=['https://www.googleapis.com/auth/cloud-platform'])
+
+def get_access_token():
+    print('reached get_access_token()')
+    request = google.auth.transport.requests.Request()
+    credentials.refresh(request)
+    print('finished get_access_token()')
+    return credentials.token
+
+def send_fcm_notification(device_token, title, body):
+    print('reached send_fcm_notification()')
+    fcm_url = 'https://fcm.googleapis.com/v1/projects/si2-p1-mobile/messages:send'
+    message = {
+        "message": {
+            "token": device_token,
+            "notification": {
+                "title": title,
+                "body": body
+            }
+        }
+    }
+    headers = {
+        'Authorization': f'Bearer {get_access_token()}',
+        'Content-Type': 'application/json; UTF-8'
+    }
+    response = requests.post(fcm_url, headers=headers, data=json.dumps(message))
+    print('finished send_fcm_notification()')
+    if response.status_code == 200:
+        print('Notification sent!')
+    else:
+        print(f"Error sending notification: {response.status_code}, {response.text}")
+    
+    
 client = StripeClient("")
 
 UPLOAD_FOLDER = str(Path(__file__).parent / 'assets')
@@ -91,11 +131,33 @@ def email_login():
     res = cur.fetchall()
     print(res)
     if (len(res) == 0): return jsonify({"detail": "Incorrect email and/or password."}), 400
+    if ("fcm" in request.json):
+        print(f"got user {res[0][0]} for FCM {request.json["fcm"]}")
+        cur.execute(f'select * from fcm where token = \'{request.json["fcm"]}\'')
+        res2 = cur.fetchall()
+        if len(res2) == 0: cur.execute('insert into fcm (userid, token) values (%s, %s)', (res[0][0], request.json["fcm"]))
+        else: cur.execute('update fcm set userid = %s where token = %s', (res[0][0], request.json["fcm"]))
+        conn.commit()
     insertBitacora(res[0][0], "Ingresó al sistema", request.remote_addr)
     return jsonify({
         "access_token": res[0][1],
         "id": res[0][0]
         }), 200
+
+@app.route('/auth/logout', methods=['POST'])
+@cross_origin(origin="*")
+def logout():
+    cur = conn.cursor() 
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token):
+        return jsonify({"detail": "Invalid token"}), 400
+    if ('fcm' in request.json):
+        cur.execute(f'delete from fcm where token = \'{request.json["fcm"]}\'')
+    insertBitacora(getUserId(token), "Salió del sistema", request.remote_addr)
+    conn.commit()
+    return jsonify({"detail": "logged out"}), 200
+
 
 @app.route('/auth/register', methods=['POST', 'OPTIONS'])
 @cross_origin(origin="*")
@@ -127,6 +189,13 @@ def register():
     cur.execute('SELECT id FROM users WHERE email = \'{0}\' AND deleted = \'N\''.format(json["email"]))
     res = cur.fetchall()
     insertBitacora(res[0][0], "Se registró en el sistema", request.remote_addr)
+    if ("fcm" in request.json):
+        print(f"got user {res[0][0]} for FCM {request.json["fcm"]}")
+        cur.execute(f'select * from fcm where token = \'{request.json["fcm"]}\'')
+        res2 = cur.fetchall()
+        if len(res2) == 0: cur.execute('insert into fcm (userid, token) values (%s, %s)', (res[0][0], request.json["fcm"]))
+        else: cur.execute('update fcm set userid = %s where token = %s', (res[0][0], request.json["fcm"]))
+        conn.commit()
     cur.execute('INSERT INTO carts (userid) VALUES ({0})'.format(res[0][0]))
     conn.commit()
     return jsonify({"access_token": token, "id": res[0][0]}), 200 
@@ -187,7 +256,7 @@ def prod():
     prods = []
     page = 0
     if ("page" in request.args): page = request.args["page"]
-    cur.execute('SELECT products.*, cast(coalesce(avg(rating) filter (where productid = products.id), 0) AS DECIMAL(2,1)) FROM products, productrating WHERE deleted = \'N\' group by products.id ORDER BY products.id DESC limit 20 offset 20*{0}'.format(page))
+    cur.execute('SELECT products.*, cast(coalesce(avg(rating) filter (where productid = products.id), 0) AS DECIMAL(2,1)) FROM products, productrating WHERE deleted = \'N\' group by products.id ORDER BY products.id DESC limit 18 offset 18*{0}'.format(page))
     res = cur.fetchall()
     for prod in res:
         prods.append({
@@ -212,7 +281,7 @@ def prod_search():
     page = 0
     if ("page" in request.args): page = request.args["page"]
     cur.execute('''SELECT products.*, cast(coalesce(avg(rating) filter (where productid = products.id), 0) AS DECIMAL(2,1)), ts_rank(to_tsvector('spanish', name || ' ' || coalesce(description, '')), websearch_to_tsquery('spanish', '{1}')) as rank
-                   FROM products, productrating WHERE deleted = 'N' AND to_tsvector('spanish', name || ' ' || coalesce(description, '')) @@ websearch_to_tsquery('spanish', '{1}') group by products.id ORDER BY rank DESC limit 20 offset 20*{0}'''.format(page, request.args["q"]))
+                   FROM products, productrating WHERE deleted = 'N' AND to_tsvector('spanish', name || ' ' || coalesce(description, '')) @@ websearch_to_tsquery('spanish', '{1}') group by products.id ORDER BY rank DESC limit 18 offset 18*{0}'''.format(page, request.args["q"]))
     res = cur.fetchall()
     for prod in res:
         prods.append({
@@ -243,7 +312,7 @@ def prod_get():
         and purchaseid in (select purchaseid from purchased, purchases 
                         where purchaseid = purchases.id and productid = {0} 
                         and purchases.paid_on > (NOW() - interval ' 6 months')) 
-        group by products.id order by count desc limit 5;
+        group by products.id order by count desc limit 6;
         '''.format(id)
         )
     res = cur.fetchall()
@@ -748,6 +817,11 @@ def update_delivery():
     cur.execute('UPDATE purchases SET delivery_status = \'En delivery\' WHERE id = {0}'.format(request.json["id"]))
     cur.execute('insert into deliveryassignment (userid, purchaseid) values ({0}, {1})'.format(getUserId(token), request.json["id"]))
     insertBitacora(getUserId(token), "Tomó el pedido {0}.".format(request.json["id"]), request.remote_addr) 
+    cur.execute(f'select token from fcm, purchases, carts where purchases.id = {request.json["id"]} and purchases.cartid = carts.id and carts.userid = fcm.userid')
+    res2 = cur.fetchall()
+    if len(res2) > 0:
+        for item in res2:
+            send_fcm_notification(item[0], "Pedido en delivery!", "Uno de tus pedidos ha sido tomado por un repartidor.")
     conn.commit()
     return jsonify({"detail": "Updated"}), 200 
 
@@ -829,6 +903,11 @@ def update_delivery_assigned():
     if not requestVerify(['id'], request): return jsonify({"detail": "Insufficient arguments"}), 400
     cur.execute('UPDATE purchases SET delivery_status = \'Entregado\' WHERE id = {0}'.format(request.json["id"]))
     cur.execute('insert into deliveryassignment (userid, purchaseid) values ({0}, {1})'.format(getUserId(token), request.json["id"]))
+    cur.execute(f'select token from fcm, purchases, carts where purchases.id = {request.json["id"]} and purchases.cartid = carts.id and carts.userid = fcm.userid')
+    res2 = cur.fetchall()
+    if len(res2) > 0:
+        for item in res2:
+            send_fcm_notification(item[0], "Pedido entregado!", "Uno de tus pedidos ha sido entregado. Por favor, revisa tu correo.")
     conn.commit()
     insertBitacora(getUserId(token), "Entregó el pedido {0}.".format(request.json["id"]), request.remote_addr) 
     return jsonify({"detail": "Updated"}), 200 
@@ -1003,13 +1082,16 @@ def stripe_checkout_confirm():
 @app.route('/admin/bitacora', methods=['GET'])
 @cross_origin(origin="*")
 def bitacora():
+    page = 0
     cur = conn.cursor()
     try: token: str = request.headers.get('Authorization').split()[1]
     except: return jsonify({"detail": "No token"}), 400
     if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
     if not adminVerify(token): return jsonify({"detail": "Unauthorized"}), 400
+    if 'page' in request.args:
+        page = request.args["page"]
     bitacora = []
-    cur.execute('select * from bitacora order by id desc')
+    cur.execute(f'select * from bitacora order by id desc limit 20 offset 20*{page}')
     res = cur.fetchall()
     for item in res:
         bitacora.append({
@@ -1064,7 +1146,42 @@ def reportes(base, criteria, order, since, until, format):
                 from users where users.deleted = 'N' group by users.id order by {0} {3};
                 '''.format(criteria, since, until, order)
         return reportehelper.reportes('USUARIOS', query, ['ID', 'Nombre', 'Apellido', 'e-mail', 'Rol', 'Pais', 'Estado/departamento', 'Direccion', 'Ordenes tomadas', 'Ordenes completadas', 'Pedidos', 'Compras', 'Monto gastado'], format)
+    if base == 'logs':
+        query = f"select id, username, role, email, action, ip, (datetime - interval '1 hour' * 4) as datetime from bitacora where {'' if criteria == 'any' else f"role = '{criteria}' and "} (datetime - interval '1 hour' * 4) >= '{since}' and (datetime - interval '1 hour' * 4) <= '{until}' order by id {order}"
+        return reportehelper.reportes('BITACORAS', query, ['ID', 'Nombre', 'Rol', 'e-mail', 'accion', 'ip', 'Fecha y hora'], format)
 
+@app.route('/reportes/create', methods=['POST'])
+@cross_origin(origin="*")
+def create_reporte():
+    cur = conn.cursor()
+    try: token: str = request.headers.get('Authorization').split()[1]
+    except: return jsonify({"detail": "No token"}), 400
+    if not authVerify(token): return jsonify({"detail": "Invalid token"}), 400
+    if not adminVerify(token): return jsonify({"detail": "Unauthorized"}), 400
+    if not requestVerify(['base', 'criteria', 'since', 'until', 'orden'], request): return jsonify({"detail": "Insufficient arguments"}), 400
+    cur.execute('insert into reportes (userid, base, criteria, since, until, orden) values (%s, %s, %s, %s, %s, %s)', (getUserId(token), request.json["base"], request.json["criteria"], request.json["since"], request.json["until"], request.json["orden"]))
+    insertBitacora(getUserId(token), f'Genero un reporte con los argumentos: {request.json["base"]}, {request.json["criteria"]}, {request.json["since"]}, {request.json["until"]} y {request.json["orden"]}, ', request.remote_addr)
+    conn.commit()
+    return jsonify({"detail": "created"})
+
+@app.route('/reportes', methods=['GET'])
+@cross_origin(origin="*")
+def list_reportes():
+    cur = conn.cursor()
+    items = []
+    cur.execute('select name, lname, base, criteria, since, until, orden from users, reportes where users.id = userid order by reportes.id desc')
+    res = cur.fetchall()
+    for item in res:
+        items.append({
+            "name": item[0],
+            "lname": item[1],
+            "base": item[2],
+            "criteria": item[3],
+            "since": item[4],
+            "until": item[5],
+            "orden": item[6],
+        })
+    return jsonify(items), 200
 
 if __name__ == '__main__':
     app.run(host='192.168.0.18', debug=True)

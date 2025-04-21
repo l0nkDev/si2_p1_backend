@@ -91,6 +91,7 @@ CREATE TABLE deliveryassignment (id serial PRIMARY KEY,
 							      userid serial REFERENCES users(id) NOT NULL,
 							      purchaseid serial REFERENCES purchases(id) NOT NULL
                                  );
+select * from deliveryassignment;
 
 CREATE TABLE bitacora (id serial PRIMARY KEY,
 						username text NOT NULL,
@@ -111,22 +112,21 @@ CREATE TABLE purchase_confirmations(id serial PRIMARY KEY,
 drop table purchase_confirmations;
 select * from purchase_confirmations;
 
-SELECT products.id, name, description, quantity, case when discount = 0 then CAST(price AS decimal(12,2)) when discount_type = 'P' then CAST(price*(1-(discount*0.01)) AS decimal(12,2)) else CAST(price-discount AS decimal(12,2)) end as fprice FROM cart_entries, products WHERE products.id = productid and cartid = 36 ORDER BY cart_entries.id DESC;
+create table fcm(id serial primary key,
+			     userid serial references users(id) not null,
+				 token varchar(255) not null);
+drop table fcm;
+select * from fcm;
 
-select users.* from users where users.id not in (select userid from carts) and deleted = 'N';
+select * from logs;
 
-select purchases.*, purchased.*, users.name, users.lname, users.id from purchases, purchased, users, carts where cartid = carts.id and carts.userid = users.id and purchaseid = purchases.id and purchases.id = 2;
 
-select products.id, products.name, products.brand, products.price, case when products.discount = 0 then products.discount when products.discount_type = 'P' then CAST(products.price*(products.discount*0.01) AS decimal(12,2)) else CAST(products.discount AS decimal(12,2)) end as discounted, case when products.discount = 0 then CAST(products.price AS decimal(12,2)) when products.discount_type = 'P' then CAST(products.price*(1-(products.discount*0.01)) AS decimal(12,2)) else CAST(products.price-products.discount AS decimal(12,2)) end as final, products.stock, sum(quantity) as units_sold from products, purchased where deleted = 'N' and purchased.productid = products.id group by products.id order by id desc
+select users.id, users.name, users.lname, users.email, users.role, users.country, users.state, users.address, 
+                (select count(*) from (select userid from deliveryassignment, purchases where userid = users.id and purchaseid = purchases.id group by userid, purchaseid)) as deliveries_taken,
+                (select count(*) from (select userid from deliveryassignment, purchases where userid = users.id and purchaseid = purchases.id and purchases.delivery_status = 'Entregado' group by userid, purchaseid)) as deliveries_completed,
+                (select count(*) from (select userid from purchases, carts where carts.id = cartid and userid = users.id)) as orders_made,
+                (select coalesce(sum(quantity), 0) from (select quantity from purchased, purchases, carts where carts.id = cartid and purchaseid = purchases.id and userid = users.id )) as products_purchased,
+                (select cast(coalesce(sum(spent), 0) as decimal(12,2)) from (select case when purchases.vip = 'N' then purchases.total_paid else purchases.total_paid*0.85 end as spent from purchased, purchases, carts where carts.id = cartid and purchaseid = purchases.id and userid = users.id)) as money_spent
+                from users where users.deleted = 'N' group by users.id order by money_spent;
 
-insert into productrating (userid, productid, rating) values (3, 1, 3.5);
-insert into products (name, brand, description, price) VALUES ('Nintendo Switch', 'Nintendo', 'Consola de videojuegos', 300);
-insert into products (name, brand, description, price) VALUES ('Nintendo Switch Lite', 'Nintendo', 'Consola de videojuegos', 250);
-insert into products (name, brand, description, price) VALUES ('Nintendo Switch OLED', 'Nintendo', 'Consola de videojuegos', 350);
-insert into products (name, brand, description, price) VALUES ('Nintendo Switch 2', 'Nintendo', 'Consola de videojuegos', 450);
-insert into products (name, brand, description, price) VALUES ('Nintendo Switch 2 + Mario Kart World', 'Nintendo', 'Consola de videojuegos', 500);
-insert into products (name, brand, description, price) VALUES ('Mario Kart World (S2)', 'Nintendo', 'Videojuegos', 80);
-insert into products (name, brand, description, price) VALUES ('Donkey Kong Bananza (S2)', 'Nintendo', 'Videojuegos', 70);
-insert into products (name, brand, description, price) VALUES ('The Legend of Zelda: Tears of the Kingdom (Switch)', 'Nintendo', 'Videojuegos', 70);
-insert into products (name, brand, description, price) VALUES ('The Legend of Zelda: Breath of the Wild (Switch)', 'Nintendo', 'Videojuegos', 60);
-insert into products (name, brand, description, price) VALUES ('Super Smash Bros. Ultimate (Switch)', 'Nintendo', 'Videojuegos', 300);
+select userid, purchaseid from deliveryassignment where userid = 1 group by userid, purchaseid;
