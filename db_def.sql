@@ -118,8 +118,19 @@ create table fcm(id serial primary key,
 drop table fcm;
 select * from fcm;
 
-select * from logs;
+create table reportes(id serial primary key,
+	                   userid serial references users(id) not null,
+					   base text not null,
+					   criteria text not null,
+					   since text not null,
+					   until text not null,
+					   orden text not null);
+drop table reportes;
+select * from reportes;
 
+select id, username, role, email, action, ip, (datetime - interval '1 hour' * 4) as datetime from bitacora where (datetime - interval '1 hour' * 4) >= '2025-01-01' and (datetime - interval '1 hour' * 4) <= '2025-11-11' order by id desc;
+
+select name, lname, base, criteria, since, until, orden from users, reportes where users.id = userid order by reportes.id desc; 
 
 select users.id, users.name, users.lname, users.email, users.role, users.country, users.state, users.address, 
                 (select count(*) from (select userid from deliveryassignment, purchases where userid = users.id and purchaseid = purchases.id group by userid, purchaseid)) as deliveries_taken,
