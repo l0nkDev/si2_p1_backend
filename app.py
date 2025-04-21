@@ -667,6 +667,10 @@ def cart_checkout():
                         products.deleted = 'N' and cart_entries.cartid = {0};
         '''.format(currentCart))
     cur.execute('update carts set paid = \'Y\' where id = {0};'.format(currentCart))
+    cur.execute(f'select id, productid, quantity from cart_entries where cartid = {currentCart}')
+    res = cur.fetchall()
+    for item in res:
+        cur.execute(f'update products set stock = stock - {item[2]} where id = {item[1]}')
     cur.execute('insert into carts (userid) values ({0});'.format(getUserId(token)))
     conn.commit()
     return jsonify({"detail": "done"}), 200
@@ -1075,6 +1079,10 @@ def stripe_checkout_confirm():
     cur.execute('update purchase_confirmations set confirmed = \'Y\' where token = \'{0}\''.format(request.args["t"]))
     cur.execute('update carts set paid = \'Y\' where id = {0};'.format(currentCart))
     cur.execute('insert into carts (userid) values ({0});'.format(userid))
+    cur.execute(f'select id, productid, quantity from cart_entries where cartid = {currentCart}')
+    res = cur.fetchall()
+    for item in res:
+        cur.execute(f'update products set stock = stock - {item[2]} where id = {item[1]}')
     conn.commit()
     insertBitacora(userid, "Finalizó el pago de su carrito.", request.remote_addr) 
     return redirect("http://l0nk5erver.duckdns.org/purchases")
