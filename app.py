@@ -190,7 +190,7 @@ def register():
     res = cur.fetchall()
     insertBitacora(res[0][0], "Se registró en el sistema", request.remote_addr)
     if ("fcm" in request.json):
-        print(f"got user {res[0][0]} for FCM {request.json["fcm"]}")
+        print(f"got user {res[0][0]} for FCM {request.json['fcm']}")
         cur.execute(f'select * from fcm where token = \'{request.json["fcm"]}\'')
         res2 = cur.fetchall()
         if len(res2) == 0: cur.execute('insert into fcm (userid, token) values (%s, %s)', (res[0][0], request.json["fcm"]))
