@@ -1155,7 +1155,7 @@ def reportes(base, criteria, order, since, until, format):
                 '''.format(criteria, since, until, order)
         return reportehelper.reportes('USUARIOS', query, ['ID', 'Nombre', 'Apellido', 'e-mail', 'Rol', 'Pais', 'Estado/departamento', 'Direccion', 'Ordenes tomadas', 'Ordenes completadas', 'Pedidos', 'Compras', 'Monto gastado'], format)
     if base == 'logs':
-        query = f"select id, username, role, email, action, ip, (datetime - interval '1 hour' * 4) as datetime from bitacora where {'' if criteria == 'any' else f"role = '{criteria}' and "} (datetime - interval '1 hour' * 4) >= '{since}' and (datetime - interval '1 hour' * 4) <= '{until}' order by id {order}"
+        query = f"select id, username, role, email, action, ip, (datetime - interval '1 hour' * 4) as datetime from bitacora where {'' if criteria == 'any' else f'role = \'{criteria}\' and '} (datetime - interval '1 hour' * 4) >= '{since}' and (datetime - interval '1 hour' * 4) <= '{until}' order by id {order}"
         return reportehelper.reportes('BITACORAS', query, ['ID', 'Nombre', 'Rol', 'e-mail', 'accion', 'ip', 'Fecha y hora'], format)
 
 @app.route('/reportes/create', methods=['POST'])
