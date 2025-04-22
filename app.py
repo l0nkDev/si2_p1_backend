@@ -133,7 +133,7 @@ def email_login():
     if (len(res) == 0): return jsonify({"detail": "Incorrect email and/or password."}), 400
     if ("fcm" in request.json):
         print(f"got user {res[0][0]} for FCM {request.json['fcm']}")
-        cur.execute(f'select * from fcm where token = \'{request.json["fcm"]}\'')
+        cur.execute(f'select * from fcm where token = \'{request.json['fcm']}\'')
         res2 = cur.fetchall()
         if len(res2) == 0: cur.execute('insert into fcm (userid, token) values (%s, %s)', (res[0][0], request.json["fcm"]))
         else: cur.execute('update fcm set userid = %s where token = %s', (res[0][0], request.json["fcm"]))
