@@ -48,7 +48,7 @@ def send_fcm_notification(device_token, title, body):
         print(f"Error sending notification: {response.status_code}, {response.text}")
     
     
-client = StripeClient("")
+client = StripeClient("sk_test_51RE6OHQw2QCLctY5g3K5YEMicjIRpgeywVLEJpf3WU0eVkMvQVVI7Qy6l5WpoCx4z3oQkEH2XKEPhmEmpEIqXlFN00fEqKlbZs")
 
 UPLOAD_FOLDER = str(Path(__file__).parent / 'assets')
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg'}
@@ -132,7 +132,7 @@ def email_login():
     print(res)
     if (len(res) == 0): return jsonify({"detail": "Incorrect email and/or password."}), 400
     if ("fcm" in request.json):
-        print(f"got user {res[0][0]} for FCM {request.json["fcm"]}")
+        print(f"got user {res[0][0]} for FCM {request.json['fcm']}")
         cur.execute(f'select * from fcm where token = \'{request.json["fcm"]}\'')
         res2 = cur.fetchall()
         if len(res2) == 0: cur.execute('insert into fcm (userid, token) values (%s, %s)', (res[0][0], request.json["fcm"]))
