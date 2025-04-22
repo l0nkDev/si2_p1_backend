@@ -1192,4 +1192,4 @@ def list_reportes():
     return jsonify(items), 200
 
 if __name__ == '__main__':
-    app.run(host='192.168.0.18', debug=True)
+    app.run(host='10.128.0.3', debug=True)
